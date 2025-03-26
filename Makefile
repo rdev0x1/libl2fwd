@@ -9,13 +9,30 @@ SRCS-y := main.c
 
 PKGCONF ?= pkg-config
 
-# Build using pkg-config variables if possible
-ifneq ($(shell $(PKGCONF) --exists libdpdk && echo 0),0)
-$(error "no installation of DPDK found")
+# List of targets that require a DPDK environment
+BUILD_TARGETS := all lib static shared
+
+# If no user-specified goals => it's effectively running 'all',
+# so we do the DPDK check. Otherwise, we filter against BUILD_TARGETS.
+ifeq ($(MAKECMDGOALS),)
+  NEED_DPDK_CHECK := 1
+else
+  ifneq ($(filter $(BUILD_TARGETS),$(MAKECMDGOALS)),)
+    NEED_DPDK_CHECK := 1
+  else
+    NEED_DPDK_CHECK := 0
+  endif
+endif
+
+# If building is needed, check for DPDK dependencies
+ifeq ($(NEED_DPDK_CHECK),1)
+  ifneq ($(shell $(PKGCONF) --exists libdpdk && echo 0),0)
+    $(error "No installation of DPDK found")
+  endif
 endif
 
 all: shared
-.PHONY: shared static
+.PHONY: shared static format
 shared: build/$(APP)-shared
 	ln -sf $(APP)-shared build/$(APP)
 static: build/$(APP)-static
@@ -45,7 +62,11 @@ build/$(APP)-static: $(SRCS-y) Makefile $(PC_FILE) | build
 build:
 	@mkdir -p $@
 
-.PHONY: clean
+format:
+	@for f in $(SRCS-y); do \
+		clang-format -style=file:.clang-format -i $$f; \
+	done
+
 clean:
 	rm -f build/$(APP) build/$(APP)-static build/$(APP)-shared
 	test -d build && rmdir -p build || true

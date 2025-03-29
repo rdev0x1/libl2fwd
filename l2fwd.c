@@ -114,6 +114,9 @@ struct l2fwd_port_statistics port_statistics[RTE_MAX_ETHPORTS];
 /* A tsc-based timer responsible for triggering statistics printout */
 static uint64_t timer_period = 10; /* default period is 10 seconds */
 
+static libl2fwd_packet_handler_t g_packet_handler = NULL;
+static void* g_packet_handler_userdata = NULL;
+
 /* Print out statistics on packets dropped */
 static void
 print_stats(void)
@@ -275,6 +278,15 @@ l2fwd_main_loop(void)
 			for (j = 0; j < nb_rx; j++) {
 				m = pkts_burst[j];
 				rte_prefetch0(rte_pktmbuf_mtod(m, void*));
+
+				/* FIRST: Invoke ntopng DPI callback (if set) */
+				if (g_packet_handler) {
+					g_packet_handler(rte_pktmbuf_mtod(m, const uint8_t*),
+							 rte_pktmbuf_pkt_len(m), portid,
+							 g_packet_handler_userdata);
+				}
+
+				/* THEN: Forward packet normally */
 				l2fwd_simple_forward(m, portid);
 			}
 		}
@@ -617,7 +629,7 @@ signal_handler(int signum)
 }
 
 int
-libl2fwd_init(int argc, char** argv)
+libl2fwd_init(const libl2fwd_config_t* config, int argc, char** argv)
 {
 	struct lcore_queue_conf* qconf;
 	int ret;
@@ -628,6 +640,17 @@ libl2fwd_init(int argc, char** argv)
 	unsigned nb_ports_in_mask = 0;
 	unsigned int nb_lcores = 0;
 	unsigned int nb_mbufs;
+
+	if (!config || !config->packet_handler) {
+		fprintf(stderr, "Invalid configuration or missing packet handler\n");
+		return -1;
+	}
+
+	g_packet_handler = config->packet_handler;
+	g_packet_handler_userdata = config->packet_handler_userdata;
+	promiscuous_on = config->promiscuous_mode;
+	mac_updating = config->mac_updating;
+	l2fwd_enabled_port_mask = config->enabled_port_mask;
 
 	/* Init EAL. 8< */
 	ret = rte_eal_init(argc, argv);
@@ -866,15 +889,12 @@ libl2fwd_start(void)
 	unsigned lcore_id;
 
 	/* launch per-lcore init on every lcore */
-	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MAIN);
-	RTE_LCORE_FOREACH_WORKER(lcore_id)
-	{
-		if (rte_eal_wait_lcore(lcore_id) < 0) {
-			return -1;
-		}
+	int ret = rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MAIN);
+	if (ret < 0) {
+		fprintf(stderr, "rte_eal_mp_remote_launch failed\n");
 	}
 
-	return 0;
+	return ret;
 }
 
 void

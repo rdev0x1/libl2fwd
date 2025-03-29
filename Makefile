@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 # Copyright(c) 2010-2014 Intel Corporation
 
-# binary name
+# library name
 APP = l2fwd
 
 # all source are stored in SRCS-y
-SRCS-y := main.c
+SRCS-y := l2fwd.c
+TEST_SRCS-y := test_main.c
+HDRS-y := libl2fwd.h
 
 PKGCONF ?= pkg-config
 
 # List of targets that require a DPDK environment
-BUILD_TARGETS := all lib static shared
+BUILD_TARGETS := all lib static shared test
 
 # If no user-specified goals => it's effectively running 'all',
 # so we do the DPDK check. Otherwise, we filter against BUILD_TARGETS.
@@ -31,42 +33,46 @@ ifeq ($(NEED_DPDK_CHECK),1)
   endif
 endif
 
-all: shared
-.PHONY: shared static format
-shared: build/$(APP)-shared
-	ln -sf $(APP)-shared build/$(APP)
-static: build/$(APP)-static
-	ln -sf $(APP)-static build/$(APP)
-
-PC_FILE := $(shell $(PKGCONF) --path libdpdk 2>/dev/null)
-CFLAGS += -O3 $(shell $(PKGCONF) --cflags libdpdk)
-# Add flag to allow experimental API as l2fwd uses rte_ethdev_set_ptype API
-CFLAGS += -DALLOW_EXPERIMENTAL_API
+CFLAGS += -O3 $(shell $(PKGCONF) --cflags libdpdk) -fPIC -DALLOW_EXPERIMENTAL_API
 LDFLAGS_SHARED = $(shell $(PKGCONF) --libs libdpdk)
 LDFLAGS_STATIC = $(shell $(PKGCONF) --static --libs libdpdk)
 
-ifeq ($(MAKECMDGOALS),static)
-# check for broken pkg-config
-ifeq ($(shell echo $(LDFLAGS_STATIC) | grep 'whole-archive.*l:lib.*no-whole-archive'),)
-$(warning "pkg-config output list does not contain drivers between 'whole-archive'/'no-whole-archive' flags.")
-$(error "Cannot generate statically-linked binaries with this version of pkg-config")
-endif
-endif
+.PHONY: all lib static shared clean test format-c format-h format
 
-build/$(APP)-shared: $(SRCS-y) Makefile $(PC_FILE) | build
-	$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_SHARED)
+all: lib test
 
-build/$(APP)-static: $(SRCS-y) Makefile $(PC_FILE) | build
-	$(CC) $(CFLAGS) $(SRCS-y) -o $@ $(LDFLAGS) $(LDFLAGS_STATIC)
+lib: shared static
+
+static: build/lib$(APP).a
+
+shared: build/lib$(APP).so
+
+build/lib$(APP).a: $(SRCS-y) $(HDRS-y) Makefile | build
+	$(CC) $(CFLAGS) -c $(SRCS-y) -o build/$(APP).o
+	ar rcs $@ build/$(APP).o
+
+build/lib$(APP).so: $(SRCS-y) $(HDRS-y) Makefile | build
+	$(CC) $(CFLAGS) -shared $(SRCS-y) -o $@ $(LDFLAGS_SHARED)
+
+test: build/testl2fwd
+
+build/testl2fwd: $(TEST_SRCS-y) build/lib$(APP).a $(HDRS-y) Makefile | build
+	$(CC) $(CFLAGS) $(TEST_SRCS-y) -o $@ build/lib$(APP).a $(LDFLAGS_STATIC)
 
 build:
 	@mkdir -p $@
 
-format:
-	@for f in $(SRCS-y); do \
+format-c:
+	@for f in $(SRCS-y) $(TEST_SRCS-y); do \
 		clang-format -style=file:.clang-format -i $$f; \
 	done
 
+format-h:
+	@for f in $(HDRS-y); do \
+		clang-format -style=file:.clang-format-h -i $$f; \
+	done
+
+format: format-c format-h
+
 clean:
-	rm -f build/$(APP) build/$(APP)-static build/$(APP)-shared
-	test -d build && rmdir -p build || true
+	rm -rf build

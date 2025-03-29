@@ -38,6 +38,8 @@
 #include <rte_mbuf.h>
 #include <rte_string_fns.h>
 
+#include "libl2fwd.h"
+
 static volatile bool force_quit;
 
 /* MAC updating enabled by default */
@@ -615,7 +617,7 @@ signal_handler(int signum)
 }
 
 int
-main(int argc, char** argv)
+libl2fwd_init(int argc, char** argv)
 {
 	struct lcore_queue_conf* qconf;
 	int ret;
@@ -855,16 +857,44 @@ main(int argc, char** argv)
 
 	check_all_ports_link_status(l2fwd_enabled_port_mask);
 
-	ret = 0;
+	return ret;
+}
+
+int
+libl2fwd_start(void)
+{
+	unsigned lcore_id;
+
 	/* launch per-lcore init on every lcore */
 	rte_eal_mp_remote_launch(l2fwd_launch_one_lcore, NULL, CALL_MAIN);
 	RTE_LCORE_FOREACH_WORKER(lcore_id)
 	{
 		if (rte_eal_wait_lcore(lcore_id) < 0) {
-			ret = -1;
-			break;
+			return -1;
 		}
 	}
+
+	return 0;
+}
+
+void
+libl2fwd_stop(void)
+{
+	unsigned lcore_id;
+
+	force_quit = true;
+	RTE_LCORE_FOREACH_WORKER(lcore_id)
+	{
+		if (rte_eal_wait_lcore(lcore_id) < 0)
+			return;
+	}
+}
+
+void
+libl2fwd_cleanup(void)
+{
+	int ret;
+	uint16_t portid;
 
 	RTE_ETH_FOREACH_DEV(portid)
 	{
@@ -881,6 +911,4 @@ main(int argc, char** argv)
 	/* clean up the EAL */
 	rte_eal_cleanup();
 	printf("Bye...\n");
-
-	return ret;
 }

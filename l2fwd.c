@@ -294,6 +294,64 @@ l2fwd_main_loop(void)
 	}
 }
 
+int
+libl2fwd_get_stats(uint16_t port_id, libl2fwd_stats_t* stats)
+{
+	if (port_id >= RTE_MAX_ETHPORTS || !stats)
+		return -1;
+
+	stats->rx_packets = port_statistics[port_id].rx;
+	stats->tx_packets = port_statistics[port_id].tx;
+	stats->dropped_packets = port_statistics[port_id].dropped;
+
+	return 0;
+}
+
+/* Return the number of DPDK ports enabled */
+uint16_t
+libl2fwd_get_nb_ports(void)
+{
+	return rte_eth_dev_count_avail();
+}
+
+/* Get the list of available port IDs dynamically */
+uint16_t
+libl2fwd_get_port_ids(uint16_t* ports, uint16_t max_ports)
+{
+	uint16_t count = 0;
+	uint16_t portid;
+
+	RTE_ETH_FOREACH_DEV(portid)
+	{
+		if (count >= max_ports)
+			break;
+		ports[count++] = portid;
+	}
+
+	return count;
+}
+
+int
+libl2fwd_get_mac_addr(uint16_t port_id, struct rte_ether_addr* mac_addr)
+{
+	int ret;
+
+	if (port_id >= RTE_MAX_ETHPORTS || mac_addr == NULL) {
+		fprintf(stderr, "Invalid parameters to libl2fwd_get_interface\n");
+		return -1;
+	}
+
+	// Retrieve MAC address
+	ret = rte_eth_macaddr_get(port_id, mac_addr);
+	if (ret != 0) {
+		fprintf(stderr, "Error getting MAC address for port %u: %s\n", port_id,
+			rte_strerror(-ret));
+		return ret;
+	}
+
+	return 0;
+}
+
 static int
 l2fwd_launch_one_lcore(__rte_unused void* dummy)
 {

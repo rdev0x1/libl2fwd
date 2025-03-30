@@ -117,6 +117,11 @@ static uint64_t timer_period = 10; /* default period is 10 seconds */
 static libl2fwd_packet_handler_t g_packet_handler = NULL;
 static void* g_packet_handler_userdata = NULL;
 
+/* Define the WAN port ID */
+#define WAN_PORT_ID 0
+static struct rte_ether_addr wan_mac;
+static bool wan_mac_initialized = false;
+
 /* Print out statistics on packets dropped */
 static void
 print_stats(void)
@@ -159,20 +164,52 @@ print_stats(void)
 	fflush(stdout);
 }
 
+static inline int
+init_wan_mac(void)
+{
+	if (wan_mac_initialized) {
+		return 0;
+	}
+	if (libl2fwd_get_mac_addr(WAN_PORT_ID, &wan_mac) != 0) {
+		RTE_LOG(ERR, L2FWD, "Cannot get MAC address for WAN port %u\n", WAN_PORT_ID);
+		return -1;
+	}
+	wan_mac_initialized = true;
+	return 0;
+}
+
 static void
 l2fwd_mac_updating(struct rte_mbuf* m, unsigned dest_portid)
 {
 	struct rte_ether_hdr* eth;
-	void* tmp;
 
 	eth = rte_pktmbuf_mtod(m, struct rte_ether_hdr*);
 
-	/* 02:00:00:00:00:xx */
-	tmp = &eth->dst_addr.addr_bytes[0];
-	*((uint64_t*)tmp) = 0x000000000002 + ((uint64_t)dest_portid << 40);
+	if (unlikely(dest_portid == WAN_PORT_ID && !wan_mac_initialized)) {
+		if (init_wan_mac() != 0) {
+			return;
+		}
+	}
+	/* For ARP packets, update only the source MAC */
+	if (eth->ether_type == rte_cpu_to_be_16(RTE_ETHER_TYPE_ARP)) {
+		if (dest_portid == WAN_PORT_ID) {
+			/* Use the WAN MAC for packets leaving via the WAN port */
+			rte_ether_addr_copy(&wan_mac, &eth->src_addr);
+		} else {
+			/* For internal packets, use the port's configured MAC */
+			rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
+		}
+		return;
+	}
 
-	/* src addr */
-	rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
+	/* For non-ARP packets */
+	if (dest_portid == WAN_PORT_ID) {
+		/* For packets leaving via the WAN, set source MAC to the WAN MAC */
+		rte_ether_addr_copy(&wan_mac, &eth->src_addr);
+	} else {
+		/* For internal traffic, use the default port MAC */
+		rte_ether_addr_copy(&l2fwd_ports_eth_addr[dest_portid], &eth->src_addr);
+	}
 }
 
 /* Simple forward. 8< */
